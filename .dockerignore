@@ -1,0 +1,9 @@
+.git/
+.claude/
+*.md
+LICENSE
+simple-po.pdf
+*.py
+__pycache__/
+.venv/
+.env

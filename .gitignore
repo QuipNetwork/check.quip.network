@@ -1,0 +1,22 @@
+# Binaries
+check-quip
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Environment
+.env
+.venv/
+
+# Python artifacts (from parent project)
+__pycache__/
+*.pyc
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store

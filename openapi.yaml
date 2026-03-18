@@ -1,0 +1,224 @@
+openapi: "3.1.0"
+info:
+  title: check.quip.network
+  description: Network diagnostic service for the QUIP P2P network. Provides IP lookup, TCP port checking, and QUIC/QUIP protocol connectivity verification.
+  version: "1.0.0"
+  license:
+    name: AGPL-3.0-or-later
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: https://check.quip.network
+    description: Production
+  - url: http://localhost:8080
+    description: Local development
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns service health status. Not rate limited.
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                    example: ok
+
+  /ip:
+    get:
+      summary: Client IP lookup
+      description: |
+        Returns the client's public IP address as seen by the service.
+        Extracts from X-Forwarded-For (first entry), X-Real-IP, or RemoteAddr.
+      operationId: getIP
+      responses:
+        "200":
+          description: Client IP address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IPResponse"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /checkport:
+    get:
+      summary: TCP port check
+      description: |
+        Checks whether a TCP port is reachable on a given host.
+        Performs a TCP connect with 5s timeout and attempts to read
+        the first 4 bytes (banner grab) with a 1s read timeout.
+        Private and loopback IPs are rejected.
+      operationId: checkPort
+      parameters:
+        - name: host
+          in: query
+          required: true
+          description: Hostname or public IP to check
+          schema:
+            type: string
+            example: node1.quip.network
+        - name: port
+          in: query
+          required: true
+          description: TCP port number (1-65535)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 65535
+            example: 20049
+      responses:
+        "200":
+          description: Port check result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckPortResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /checkconn:
+    get:
+      summary: QUIP connectivity check
+      description: |
+        Verifies QUIC/QUIP protocol connectivity to a remote node.
+        Performs a QUIC handshake with ALPN "quip-v1", TLS 1.3,
+        then sends a STATUS_REQUEST datagram and waits for a
+        STATUS_RESPONSE. Self-signed certificates are accepted.
+        Private and loopback IPs are rejected.
+      operationId: checkConn
+      parameters:
+        - name: host
+          in: query
+          required: true
+          description: Hostname or public IP to check
+          schema:
+            type: string
+            example: node1.quip.network
+        - name: port
+          in: query
+          required: false
+          description: QUIC port number (defaults to 20049)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 65535
+            default: 20049
+      responses:
+        "200":
+          description: QUIP connectivity result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckConnResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+components:
+  schemas:
+    IPResponse:
+      type: object
+      required: [ip]
+      properties:
+        ip:
+          type: string
+          description: Client's public IP address
+          example: "203.0.113.42"
+
+    CheckPortResponse:
+      type: object
+      required: [host, port, reachable]
+      properties:
+        host:
+          type: string
+          example: node1.quip.network
+        port:
+          type: integer
+          example: 20049
+        reachable:
+          type: boolean
+          description: Whether the TCP connection succeeded
+        bytes:
+          type: string
+          description: Hex-encoded first bytes read from the connection (only when reachable)
+          example: "0a1b2c3d"
+        error:
+          type: string
+          description: Error message (only when not reachable)
+          example: "connection refused"
+
+    CheckConnResponse:
+      type: object
+      required: [host, port, quip]
+      properties:
+        host:
+          type: string
+          example: node1.quip.network
+        port:
+          type: integer
+          example: 20049
+        quip:
+          type: boolean
+          description: Whether the QUIC handshake with ALPN quip-v1 succeeded
+        handshake_ms:
+          type: integer
+          description: QUIC handshake duration in milliseconds (only when quip=true)
+          example: 123
+        status_response:
+          type: boolean
+          description: Whether a STATUS_RESPONSE datagram was received (only when quip=true)
+        error:
+          type: string
+          description: Error message (only when quip=false)
+          example: "handshake timeout"
+
+    RateLimitResponse:
+      type: object
+      required: [error, retry_after_seconds, ban_level]
+      properties:
+        error:
+          type: string
+          enum: ["rate limited"]
+        retry_after_seconds:
+          type: integer
+          description: Seconds until the ban expires
+          example: 3600
+        ban_level:
+          type: integer
+          description: "Escalation level: 1=1hr, 2=1day, 3+=1week"
+          example: 1
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          example: "host parameter required"
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    RateLimited:
+      description: Rate limit exceeded with escalating ban
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RateLimitResponse"
