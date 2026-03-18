@@ -127,6 +127,34 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /checkhostname:
+    get:
+      summary: Hostname-to-IP match check
+      description: |
+        Checks whether the caller's public IP matches the DNS resolution
+        of the provided hostname. Useful for QUIP nodes to verify their
+        DNS is correctly configured before advertising their hostname.
+      operationId: checkHostname
+      parameters:
+        - name: hostname
+          in: query
+          required: true
+          description: Hostname to resolve and compare against the caller's IP
+          schema:
+            type: string
+            example: node1.quip.network
+      responses:
+        "200":
+          description: Hostname match result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckHostnameResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
 components:
   schemas:
     IPResponse:
@@ -184,6 +212,30 @@ components:
           type: string
           description: Error message (only when quip=false)
           example: "handshake timeout"
+
+    CheckHostnameResponse:
+      type: object
+      required: [hostname, client_ip, match]
+      properties:
+        hostname:
+          type: string
+          example: node1.quip.network
+        client_ip:
+          type: string
+          description: The caller's public IP as seen by the service
+          example: "203.0.113.42"
+        resolved_ips:
+          type: array
+          items:
+            type: string
+          description: All IPs the hostname resolves to
+          example: ["203.0.113.42", "2001:db8::1"]
+        match:
+          type: boolean
+          description: Whether the client's IP is among the resolved IPs
+        error:
+          type: string
+          description: Error message if DNS lookup failed
 
     RateLimitResponse:
       type: object

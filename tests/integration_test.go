@@ -177,6 +177,42 @@ func TestCheckConnDefaultPort(t *testing.T) {
 	}
 }
 
+func TestCheckHostnameMissingParam(t *testing.T) {
+	code, _ := getJSON(t, "/checkhostname")
+	if code != 400 {
+		t.Fatalf("expected 400, got %d", code)
+	}
+}
+
+func TestCheckHostnameResponse(t *testing.T) {
+	code, body := getJSON(t, "/checkhostname?hostname=example.com")
+	if code != 200 {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if _, ok := body["client_ip"].(string); !ok {
+		t.Fatalf("expected client_ip string, got %v", body["client_ip"])
+	}
+	if _, ok := body["match"].(bool); !ok {
+		t.Fatalf("expected match bool, got %v", body["match"])
+	}
+	if _, ok := body["resolved_ips"]; !ok {
+		t.Fatalf("expected resolved_ips field")
+	}
+}
+
+func TestCheckHostnameInvalidDNS(t *testing.T) {
+	code, body := getJSON(t, "/checkhostname?hostname=this.does.not.exist.invalid")
+	if code != 200 {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if body["match"] != false {
+		t.Fatalf("expected match=false for invalid hostname")
+	}
+	if _, ok := body["error"].(string); !ok {
+		t.Fatalf("expected error field for DNS failure")
+	}
+}
+
 func TestRateLimitEnforced(t *testing.T) {
 	// Use a unique client approach — send 6 rapid requests.
 	// The rate limiter tracks by IP, so in integration tests behind
