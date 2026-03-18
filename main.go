@@ -26,6 +26,7 @@ func main() {
 	mux.HandleFunc("GET /ip", handler.IP)
 	mux.HandleFunc("GET /checkport", handler.CheckPort)
 	mux.HandleFunc("GET /checkconn", handler.CheckConn)
+	mux.HandleFunc("GET /checkhostname", handler.CheckHostname)
 
 	srv := &http.Server{
 		Addr:    ":" + port,
