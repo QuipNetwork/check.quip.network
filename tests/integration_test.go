@@ -75,41 +75,36 @@ func TestIPWithForwardedFor(t *testing.T) {
 	}
 }
 
-func TestCheckPortReachable(t *testing.T) {
-	// Check the service's own HTTP port via a public hostname.
-	// This may not work in all environments; skip if no suitable target.
-	code, body := getJSON(t, "/checkport?host=google.com&port=443")
+func TestCheckPortUsesCallerIP(t *testing.T) {
+	// /checkport no longer accepts a host param — it uses the caller's IP.
+	// Probing the caller's own port 1 should return reachable=false.
+	code, body := getJSON(t, "/checkport?port=1")
 	if code != 200 {
 		t.Fatalf("expected 200, got %d", code)
 	}
-	if body["reachable"] != true {
-		t.Logf("google.com:443 not reachable (may be network-restricted): %v", body)
-	}
-}
-
-func TestCheckPortUnreachable(t *testing.T) {
-	// Port 1 is almost never open.
-	code, body := getJSON(t, "/checkport?host=google.com&port=1")
-	if code != 200 {
-		t.Fatalf("expected 200, got %d", code)
+	// Verify the response includes the caller's IP as host.
+	if _, ok := body["host"].(string); !ok {
+		t.Fatalf("expected host field in response")
 	}
 	if body["reachable"] != false {
-		t.Fatalf("expected reachable=false for port 1, got %v", body["reachable"])
-	}
-	if _, ok := body["error"]; !ok {
-		t.Fatalf("expected error field when unreachable")
+		t.Fatalf("expected reachable=false for port 1")
 	}
 }
 
-func TestCheckPortInvalidInputs(t *testing.T) {
+func TestCheckPortMissingPort(t *testing.T) {
+	code, _ := getJSON(t, "/checkport")
+	if code != 400 {
+		t.Fatalf("expected 400, got %d", code)
+	}
+}
+
+func TestCheckPortInvalidPort(t *testing.T) {
 	cases := []struct {
 		name string
 		path string
 	}{
-		{"missing host", "/checkport?port=80"},
-		{"missing port", "/checkport?host=example.com"},
-		{"port zero", "/checkport?host=example.com&port=0"},
-		{"port too high", "/checkport?host=example.com&port=99999"},
+		{"port zero", "/checkport?port=0"},
+		{"port too high", "/checkport?port=99999"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,59 +116,36 @@ func TestCheckPortInvalidInputs(t *testing.T) {
 	}
 }
 
-func TestCheckPortPrivateIP(t *testing.T) {
-	cases := []string{
-		"/checkport?host=127.0.0.1&port=80",
-		"/checkport?host=10.0.0.1&port=80",
-		"/checkport?host=192.168.1.1&port=80",
-	}
-	for _, path := range cases {
-		t.Run(path, func(t *testing.T) {
-			code, _ := getJSON(t, path)
-			if code != 400 {
-				t.Fatalf("expected 400 for private IP, got %d", code)
-			}
-		})
-	}
-}
-
-func TestCheckConnInvalidInputs(t *testing.T) {
-	cases := []struct {
-		name string
-		path string
-	}{
-		{"missing host", "/checkconn"},
-		{"private IP", "/checkconn?host=127.0.0.1"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			code, _ := getJSON(t, tc.path)
-			if code != 400 {
-				t.Fatalf("expected 400, got %d", code)
-			}
-		})
-	}
-}
-
-func TestCheckConnUnreachable(t *testing.T) {
-	// Use a public IP that won't respond on QUIC port.
-	code, body := getJSON(t, "/checkconn?host=google.com&port=1")
+func TestCheckConnUsesCallerIP(t *testing.T) {
+	// /checkconn uses the caller's IP. Port 1 won't have QUIC.
+	code, body := getJSON(t, "/checkconn?port=1")
 	if code != 200 {
 		t.Fatalf("expected 200, got %d", code)
 	}
+	if _, ok := body["host"].(string); !ok {
+		t.Fatalf("expected host field in response")
+	}
 	if body["quip"] != false {
-		t.Fatalf("expected quip=false for unreachable host")
+		t.Fatalf("expected quip=false")
 	}
 }
 
 func TestCheckConnDefaultPort(t *testing.T) {
-	code, body := getJSON(t, "/checkconn?host=google.com")
+	// Omitting port defaults to 20049.
+	code, body := getJSON(t, "/checkconn")
 	if code != 200 {
 		t.Fatalf("expected 200, got %d", code)
 	}
 	port, ok := body["port"].(float64)
 	if !ok || int(port) != 20049 {
 		t.Fatalf("expected default port 20049, got %v", body["port"])
+	}
+}
+
+func TestCheckConnInvalidPort(t *testing.T) {
+	code, _ := getJSON(t, "/checkconn?port=99999")
+	if code != 400 {
+		t.Fatalf("expected 400, got %d", code)
 	}
 }
 

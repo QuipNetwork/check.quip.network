@@ -23,15 +23,12 @@ const (
 	statusResponseTimeout = 3 * time.Second
 )
 
-// CheckConn handles GET /checkconn?host=HOST&port=PORT.
+// CheckConn handles GET /checkconn?port=PORT.
+// The target host is always the caller's own IP — this prevents
+// the service from being used to scan arbitrary QUIC endpoints.
 func CheckConn(w http.ResponseWriter, r *http.Request) {
-	host := r.URL.Query().Get("host")
+	host := internal.ExtractClientIP(r)
 	portStr := r.URL.Query().Get("port")
-
-	if host == "" {
-		writeError(w, http.StatusBadRequest, "host parameter required")
-		return
-	}
 
 	port := quipproto.DefaultPort
 	if portStr != "" {
@@ -41,11 +38,6 @@ func CheckConn(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		port = p
-	}
-
-	if _, err := internal.ResolveAndValidate(host); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
 	}
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))

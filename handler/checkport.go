@@ -21,15 +21,13 @@ const (
 	maxBannerBytes    = 4
 )
 
-// CheckPort handles GET /checkport?host=HOST&port=PORT.
+// CheckPort handles GET /checkport?port=PORT.
+// The target host is always the caller's own IP — this prevents
+// the service from being used as an internet port scanner.
 func CheckPort(w http.ResponseWriter, r *http.Request) {
-	host := r.URL.Query().Get("host")
+	host := internal.ExtractClientIP(r)
 	portStr := r.URL.Query().Get("port")
 
-	if host == "" {
-		writeError(w, http.StatusBadRequest, "host parameter required")
-		return
-	}
 	if portStr == "" {
 		writeError(w, http.StatusBadRequest, "port parameter required")
 		return
@@ -38,11 +36,6 @@ func CheckPort(w http.ResponseWriter, r *http.Request) {
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port < 1 || port > 65535 {
 		writeError(w, http.StatusBadRequest, "port must be 1-65535")
-		return
-	}
-
-	if _, err := internal.ResolveAndValidate(host); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
