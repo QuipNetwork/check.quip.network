@@ -15,12 +15,20 @@ import (
 	"check.quip.network/probe"
 )
 
-// CheckProbe handles GET /probe?host=HOST&api_port=&p2p_port=&tls_port=&checks=&http=
+// NewProbe returns the GET /probe handler backed by cache.
 //
 // Unlike /checkport (self-IP only), this targets an explicit host so node-quest
-// and operators can verify public infrastructure. Subject to the global
-// per-IP rate limit (5/min by default).
-func CheckProbe(w http.ResponseWriter, r *http.Request) {
+// and operators can verify public infrastructure. Subject to the global per-IP
+// rate limit (5/min by default) and, per target host, to one real probe per
+// day; repeat callers receive the cached result.
+func NewProbe(cache *probe.Cache) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		checkProbe(w, r, cache)
+	}
+}
+
+// checkProbe handles GET /probe?host=HOST&api_port=&p2p_port=&tls_port=&checks=&http=
+func checkProbe(w http.ResponseWriter, r *http.Request, cache *probe.Cache) {
 	host := strings.TrimSpace(r.URL.Query().Get("host"))
 	if host == "" {
 		writeError(w, http.StatusBadRequest, "host parameter required")
@@ -79,7 +87,9 @@ func CheckProbe(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout+2*time.Second)
 	defer cancel()
 
-	results := probe.Run(ctx, probe.Options{
+	// Cache is keyed on host alone, so a fresh entry is returned even when the
+	// port or check parameters differ; params_used reports what actually ran.
+	resp := cache.Get(ctx, probe.Options{
 		Host:     host,
 		APIPort:  apiPort,
 		P2PPort:  p2pPort,
@@ -89,9 +99,15 @@ func CheckProbe(w http.ResponseWriter, r *http.Request) {
 		Checks:   checks,
 	})
 
-	// JSON object keyed by check name (matches node-quest client expectations).
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(results)
+	if resp.Cached {
+		w.Header().Set("X-Cache", "HIT")
+	} else {
+		w.Header().Set("X-Cache", "MISS")
+	}
+	w.Header().Set("X-Cache-Cached-At", resp.CachedAt.UTC().Format(time.RFC3339))
+	w.Header().Set("X-Cache-Expires", resp.ExpiresAt.UTC().Format(time.RFC3339))
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func parsePortDefault(raw string, def int) (int, error) {

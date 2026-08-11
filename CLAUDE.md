@@ -49,6 +49,7 @@ make clean       # stop and remove container
 | `GET /checkport?port=P` | TCP port reachability on caller's own IP + banner grab |
 | `GET /checkhostname?hostname=H` | Checks if caller IP matches hostname DNS resolution |
 | `GET /checkconn?port=P` | QUIC/QUIP connectivity check on caller's own IP (ALPN `quip-v1`) |
+| `GET /probe?host=H` | Host-targeted reward checks (p2p, api_port, tls, rpc, telemetry, dashboard), cached 24h per host |
 
 ### File Structure
 
@@ -60,6 +61,9 @@ make clean       # stop and remove container
 | `handler/checkport.go` | GET /checkport — TCP connect + banner grab |
 | `handler/checkhostname.go` | GET /checkhostname — hostname-to-IP match |
 | `handler/checkconn.go` | GET /checkconn — QUIC/QUIP protocol check |
+| `handler/probe.go` | GET /probe — request parsing, host validation |
+| `probe/probe.go` | The six reward checks (source of truth for check semantics) |
+| `probe/cache.go` | 24h per-host probe cache + response envelope |
 | `quip/protocol.go` | QUIP wire format constants + STATUS_REQUEST builder |
 | `internal/iputil.go` | IP extraction (XFF, X-Real-IP, RemoteAddr), private IP validation |
 | `ratelimit/ratelimit.go` | Sliding window (5 req/min) + escalating bans |
@@ -71,6 +75,15 @@ make clean       # stop and remove container
 - 5 requests/minute per IP (sliding window), all endpoints except /health
 - Escalating bans: 1st violation → 1hr, 2nd → 1 day, 3rd+ → 1 week
 - Background cleanup prunes idle entries every 10 minutes
+
+### Probe Caching
+
+`/probe` runs at most one real probe per target host per 24 hours. Later
+requests return the stored result with `cached: true` and an `X-Cache: HIT`
+header. The cache key is the normalized host alone, not the query parameters,
+so varying ports or checks cannot force a fresh probe; `params_used` in the
+response reports the options the stored probe ran with. The per-host lock also
+collapses concurrent first-requests into a single outbound probe.
 
 ### Security: Self-Check Only
 

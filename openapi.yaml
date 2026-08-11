@@ -152,6 +152,12 @@ paths:
         Source of truth for probe semantics (p2p, api_port, tls, rpc,
         telemetry, dashboard). Subject to the global per-IP rate limit.
         Loopback and link-local targets are rejected.
+
+        Each target host is probed at most once per 24 hours. Later requests
+        for that host return the stored result with `cached` set to true and
+        an `X-Cache: HIT` header. The cache key is the host alone, so a
+        request that gives different ports or checks still returns the stored
+        result; `params_used` reports the options the stored probe ran with.
       operationId: probeHost
       parameters:
         - name: host
@@ -202,13 +208,27 @@ paths:
             default: 5
       responses:
         "200":
-          description: Map of check name to result
+          description: Probe results, freshly run or served from the 24h cache
+          headers:
+            X-Cache:
+              description: HIT if served from cache, MISS if freshly probed
+              schema:
+                type: string
+                enum: [HIT, MISS]
+            X-Cache-Cached-At:
+              description: When the returned probe ran (RFC 3339)
+              schema:
+                type: string
+                format: date-time
+            X-Cache-Expires:
+              description: When the host may be probed again (RFC 3339)
+              schema:
+                type: string
+                format: date-time
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties:
-                  $ref: "#/components/schemas/ProbeResult"
+                $ref: "#/components/schemas/ProbeResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "429":
@@ -312,6 +332,61 @@ components:
         port:
           type: integer
           nullable: true
+
+    ProbeParams:
+      type: object
+      description: The options the returned probe actually ran with
+      required: [api_port, p2p_port, tls_port, https, timeout_seconds, checks]
+      properties:
+        api_port:
+          type: integer
+          example: 20049
+        p2p_port:
+          type: integer
+          example: 30333
+        tls_port:
+          type: integer
+          description: 0 means the TLS check was skipped
+          example: 443
+        https:
+          type: boolean
+        timeout_seconds:
+          type: number
+          example: 5
+        checks:
+          type: array
+          items:
+            type: string
+          example: [p2p, api_port, tls, rpc, telemetry, dashboard]
+
+    ProbeResponse:
+      type: object
+      required: [cached, cached_at, expires_at, host, params_used, checks]
+      properties:
+        cached:
+          type: boolean
+          description: >
+            True when the result came from the 24h cache and no probe ran for
+            this request.
+        cached_at:
+          type: string
+          format: date-time
+          description: When the returned probe ran
+        expires_at:
+          type: string
+          format: date-time
+          description: When the host may be probed again
+        host:
+          type: string
+          description: The host given in the request
+          example: miner.example.com
+        params_used:
+          $ref: "#/components/schemas/ProbeParams"
+        checks:
+          type: object
+          description: Map of check name to result
+          additionalProperties:
+            $ref: "#/components/schemas/ProbeResult"
 
     RateLimitResponse:
       type: object

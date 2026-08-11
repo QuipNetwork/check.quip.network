@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"check.quip.network/handler"
+	"check.quip.network/probe"
 	"check.quip.network/ratelimit"
 )
 
@@ -21,6 +22,10 @@ func main() {
 	limiter := ratelimit.New()
 	defer limiter.Stop()
 
+	// One real probe per target host per day; repeats are served from cache.
+	probeCache := probe.NewCache()
+	defer probeCache.Stop()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handler.Health)
 	mux.HandleFunc("GET /ip", handler.IP)
@@ -28,8 +33,9 @@ func main() {
 	mux.HandleFunc("GET /checkconn", handler.CheckConn)
 	mux.HandleFunc("GET /checkhostname", handler.CheckHostname)
 	// Host-targeted reward probes (source of truth for node-quest boosts).
-	// Rate-limited by the global limiter (default 5 req/min per client IP).
-	mux.HandleFunc("GET /probe", handler.CheckProbe)
+	// Rate-limited by the global limiter (default 5 req/min per client IP)
+	// and cached per target host for 24h.
+	mux.HandleFunc("GET /probe", handler.NewProbe(probeCache))
 
 	srv := &http.Server{
 		Addr:    ":" + port,
