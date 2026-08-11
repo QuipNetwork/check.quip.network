@@ -27,6 +27,9 @@ func main() {
 	mux.HandleFunc("GET /checkport", handler.CheckPort)
 	mux.HandleFunc("GET /checkconn", handler.CheckConn)
 	mux.HandleFunc("GET /checkhostname", handler.CheckHostname)
+	// Host-targeted reward probes (source of truth for node-quest boosts).
+	// Rate-limited by the global limiter (default 5 req/min per client IP).
+	mux.HandleFunc("GET /probe", handler.CheckProbe)
 
 	srv := &http.Server{
 		Addr:    ":" + port,

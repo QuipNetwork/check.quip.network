@@ -143,6 +143,77 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /probe:
+    get:
+      summary: Host-targeted node probes (reward boosts)
+      description: |
+        Runs the same connectivity checks used for testnet node operator
+        reward percentage boosts against an explicit host (not the caller IP).
+        Source of truth for probe semantics (p2p, api_port, tls, rpc,
+        telemetry, dashboard). Subject to the global per-IP rate limit.
+        Loopback and link-local targets are rejected.
+      operationId: probeHost
+      parameters:
+        - name: host
+          in: query
+          required: true
+          description: Public hostname or IP to probe
+          schema:
+            type: string
+            example: miner.example.com
+        - name: api_port
+          in: query
+          schema:
+            type: integer
+            default: 20049
+            minimum: 1
+            maximum: 65535
+        - name: p2p_port
+          in: query
+          schema:
+            type: integer
+            default: 30333
+            minimum: 1
+            maximum: 65535
+        - name: tls_port
+          in: query
+          description: TLS port (0 skips the TLS check)
+          schema:
+            type: integer
+            default: 443
+        - name: checks
+          in: query
+          description: Comma-separated check names or "all"
+          schema:
+            type: string
+            default: all
+            example: p2p,api_port,tls,rpc,telemetry,dashboard
+        - name: http
+          in: query
+          description: If true/1, use http instead of https for API paths
+          schema:
+            type: string
+            enum: ["0", "1", "true", "false"]
+        - name: timeout
+          in: query
+          description: Per-check timeout in seconds (max 30)
+          schema:
+            type: number
+            default: 5
+      responses:
+        "200":
+          description: Map of check name to result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  $ref: "#/components/schemas/ProbeResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
 components:
   schemas:
     IPResponse:
@@ -224,6 +295,23 @@ components:
         error:
           type: string
           description: Error message if DNS lookup failed
+
+    ProbeResult:
+      type: object
+      required: [name, ok]
+      properties:
+        name:
+          type: string
+          example: p2p
+        ok:
+          type: boolean
+        detail:
+          type: string
+        host:
+          type: string
+        port:
+          type: integer
+          nullable: true
 
     RateLimitResponse:
       type: object
