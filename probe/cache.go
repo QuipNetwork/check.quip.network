@@ -75,11 +75,18 @@ type Cache struct {
 
 // NewCache creates a Cache and starts its background eviction goroutine.
 func NewCache() *Cache {
+	return NewCacheWithRunner(Run)
+}
+
+// NewCacheWithRunner returns a Cache that calls run in place of Run. It exists so
+// that packages outside probe can exercise cache-backed handlers without real
+// network I/O; production callers want NewCache.
+func NewCacheWithRunner(run func(context.Context, Options) map[string]Result) *Cache {
 	c := &Cache{
 		entries: make(map[string]*cacheEntry),
 		stop:    make(chan struct{}),
 		now:     time.Now,
-		run:     Run,
+		run:     run,
 	}
 	go c.cleanup()
 	return c

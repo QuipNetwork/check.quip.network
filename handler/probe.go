@@ -6,6 +6,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -67,13 +68,23 @@ func checkProbe(w http.ResponseWriter, r *http.Request, cache *probe.Cache) {
 		useHTTPS = false
 	}
 
+	// Reject unknown check names rather than probing and returning an empty
+	// result set: an empty set is indistinguishable from "every check failed",
+	// and caching it would pin the host to that answer for the full TTL.
 	var checks []string
 	if raw := strings.TrimSpace(r.URL.Query().Get("checks")); raw != "" && !strings.EqualFold(raw, "all") {
-		for _, c := range strings.Split(raw, ",") {
+		for c := range strings.SplitSeq(raw, ",") {
 			c = strings.TrimSpace(c)
-			if c != "" {
-				checks = append(checks, c)
+			if c == "" {
+				continue
 			}
+			if !probe.ValidCheckName(c) {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf(
+					"unknown check %q: valid checks are %s",
+					c, strings.Join(probe.CheckNames(), ", ")))
+				return
+			}
+			checks = append(checks, strings.ToLower(c))
 		}
 	}
 
