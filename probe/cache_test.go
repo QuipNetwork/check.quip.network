@@ -189,6 +189,77 @@ func TestCacheCollapsesConcurrentProbes(t *testing.T) {
 	}
 }
 
+// Failed probes are cached for the full TTL. Serving a fresh probe after a
+// failure would let a caller bypass the daily limit by making probes fail.
+func TestCacheStoresFailedProbes(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	c := &Cache{
+		entries: make(map[string]*cacheEntry),
+		stop:    make(chan struct{}),
+		now:     func() time.Time { return now },
+		run: func(_ context.Context, _ Options) map[string]Result {
+			calls++
+			return map[string]Result{
+				"p2p": {Name: "p2p", OK: false, Detail: "i/o timeout"},
+				"tls": {Name: "tls", OK: false, Detail: "i/o timeout"},
+			}
+		},
+	}
+	opt := Options{Host: "down.example.com"}
+
+	c.Get(context.Background(), opt)
+
+	now = now.Add(time.Minute)
+	resp := c.Get(context.Background(), opt)
+	if !resp.Cached {
+		t.Error("after an all-failure probe: got cached=false, want true")
+	}
+	if calls != 1 {
+		t.Errorf("probe ran %d times, want 1 — failures must not be re-probed", calls)
+	}
+}
+
+// An empty result set means no check ran, so storing it would pin the host to
+// a zero-check answer for a day.
+func TestCacheDoesNotStoreEmptyResults(t *testing.T) {
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	c := &Cache{
+		entries: make(map[string]*cacheEntry),
+		stop:    make(chan struct{}),
+		now:     func() time.Time { return now },
+		run: func(_ context.Context, opt Options) map[string]Result {
+			calls++
+			// Mirrors Run: unrecognized check names select nothing.
+			if len(opt.Checks) > 0 && opt.Checks[0] == "bogus" {
+				return map[string]Result{}
+			}
+			return map[string]Result{"p2p": {Name: "p2p", OK: true}}
+		},
+	}
+
+	resp := c.Get(context.Background(), Options{
+		Host:   "miner.example.com",
+		Checks: []string{"bogus"},
+	})
+	if len(resp.Checks) != 0 {
+		t.Fatalf("setup: got %d checks, want 0", len(resp.Checks))
+	}
+
+	// The bogus request must not have poisoned the host.
+	next := c.Get(context.Background(), Options{Host: "miner.example.com"})
+	if next.Cached {
+		t.Error("after an empty result set: got cached=true, want false")
+	}
+	if len(next.Checks) == 0 {
+		t.Error("follow-up request returned no checks; the empty set was cached")
+	}
+	if calls != 2 {
+		t.Errorf("probe ran %d times, want 2", calls)
+	}
+}
+
 func TestEvictExpiredRemovesStaleEntriesOnly(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	calls := 0
