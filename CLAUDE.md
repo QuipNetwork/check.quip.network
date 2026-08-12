@@ -85,6 +85,9 @@ so varying ports or checks cannot force a fresh probe; `params_used` in the
 response reports the options the stored probe ran with. The per-host lock also
 collapses concurrent first-requests into a single outbound probe.
 
+Unknown `checks` names are rejected with 400 before any probe runs, so a
+request cannot reach the cache with a selection that matches nothing.
+
 Failures are cached for the full 24 hours, the same as successes. A shorter TTL
 for failures would let a caller re-probe any host on demand by making the probe
 fail. The one result not stored is an empty set, which means the requested
