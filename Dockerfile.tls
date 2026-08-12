@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Build the Go binary
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN GOTOOLCHAIN=auto go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o /check-quip .
+
+# Build the certifier CLI from source.
+# dnsimple-certifier is a separate private repo, not vendored here — run
+# scripts/fetch-certifier.sh (or `make certifier-src`) to populate this path
+# before building. The published certifier image ships only the server binary,
+# so the CLI has to be built from source.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS certifier-builder
+
+ARG TARGETOS
+ARG TARGETARCH
+
+COPY dnsimple-certifier /src
+WORKDIR /src
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o /certifier ./cmd/certifier/
+
+# Runtime with nginx + certifier CLI for TLS
+FROM alpine:3.21
+
+COPY --from=builder /check-quip /usr/local/bin/check-quip
+COPY --from=certifier-builder /certifier /usr/local/bin/certifier
+
+# Install nginx and envsubst
+RUN apk add --no-cache nginx gettext
+
+# Stash the system trust store outside /etc/ssl. Flux mounts the app volume at
+# /etc/ssl (containerData), and if that mount shadows the image's contents the
+# CA bundle disappears — which silently breaks the /probe tls, rpc, telemetry
+# and dashboard checks, since they verify against the system pool. entrypoint.sh
+# restores these if the mount came up empty.
+RUN mkdir -p /opt/ssl-defaults/certs \
+    && cp /etc/ssl/cert.pem /opt/ssl-defaults/cert.pem \
+    && cp /etc/ssl/certs/ca-certificates.crt /opt/ssl-defaults/certs/ca-certificates.crt
+
+# Nginx config template — domain substituted at runtime via envsubst
+COPY nginx.conf /etc/nginx/nginx.conf.template
+
+# Entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 80 443
+
+ENTRYPOINT ["/entrypoint.sh"]

@@ -1,6 +1,10 @@
 # Binaries
 check-quip
+certifier
 *.exe
+
+# Build input for Dockerfile.tls, fetched by scripts/fetch-certifier.sh
+dnsimple-certifier/
 
 # IDE
 .idea/

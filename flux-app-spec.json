@@ -1,0 +1,47 @@
+{
+  "version": 8,
+  "name": "checkquipnetwork",
+  "description": "Network diagnostic service for QUIP P2P nodes",
+  "owner": "1H18UuAxugZihfoagL8xNT1Rpxn55dZtZ3",
+  "compose": [
+    {
+      "name": "check",
+      "description": "check.quip.network diagnostic service with TLS via certifier",
+      "repotag": "registry.gitlab.com/quip.network/check.quip.network:tls-PENDING-amd64@sha256:PENDING",
+      "ports": [
+        443,
+        80
+      ],
+      "domains": [
+        "check.quip.network",
+        ""
+      ],
+      "environmentParameters": [
+        "CHECK_DOMAIN=check.quip.network",
+        "CERTIFIER_HOSTNAME=certifier.quip.network:9443",
+        "CERTIFIER_TOKEN=<certifier-token>"
+      ],
+      "commands": [],
+      "containerPorts": [
+        443,
+        80
+      ],
+      "containerData": "/etc/ssl",
+      "cpu": 0.5,
+      "ram": 512,
+      "hdd": 1,
+      "repoauth": "",
+      "secrets": ""
+    }
+  ],
+  "instances": 1,
+  "contacts": [
+    "F_S_CONTACTS=https://storage.runonflux.io/v1/contacts/94469486508667"
+  ],
+  "geolocation": [
+    "a!cEU_RU"
+  ],
+  "nodes": [],
+  "staticip": true,
+  "enterprise": "<enterprise-blob>"
+}
