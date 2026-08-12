@@ -85,6 +85,11 @@ so varying ports or checks cannot force a fresh probe; `params_used` in the
 response reports the options the stored probe ran with. The per-host lock also
 collapses concurrent first-requests into a single outbound probe.
 
+Failures are cached for the full 24 hours, the same as successes. A shorter TTL
+for failures would let a caller re-probe any host on demand by making the probe
+fail. The one result not stored is an empty set, which means the requested
+check names matched nothing.
+
 ### Security: Self-Check Only
 
 `/checkport` and `/checkconn` always target the caller's own IP (derived from the connection). No `host` parameter is accepted — this prevents the service from being used as a port scanner or QUIC probe against arbitrary targets.
