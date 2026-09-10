@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -51,6 +52,21 @@ type Options struct {
 
 var allCheckNames = []string{
 	"p2p", "api_port", "tls", "rpc", "telemetry", "dashboard",
+}
+
+// CheckNames returns the names of every check Run can execute. The result is a
+// copy, so callers cannot reorder or overwrite the package list.
+func CheckNames() []string {
+	names := make([]string, len(allCheckNames))
+	copy(names, allCheckNames)
+	return names
+}
+
+// ValidCheckName reports whether name selects a check Run can execute. Names are
+// matched after trimming and lowercasing, the same normalization Run applies, so
+// a name accepted here always selects a check once Run sees it.
+func ValidCheckName(name string) bool {
+	return slices.Contains(allCheckNames, strings.TrimSpace(strings.ToLower(name)))
 }
 
 var dashboardMarkers = []string{

@@ -75,11 +75,18 @@ type Cache struct {
 
 // NewCache creates a Cache and starts its background eviction goroutine.
 func NewCache() *Cache {
+	return NewCacheWithRunner(Run)
+}
+
+// NewCacheWithRunner returns a Cache that calls run in place of Run. It exists so
+// that packages outside probe can exercise cache-backed handlers without real
+// network I/O; production callers want NewCache.
+func NewCacheWithRunner(run func(context.Context, Options) map[string]Result) *Cache {
 	c := &Cache{
 		entries: make(map[string]*cacheEntry),
 		stop:    make(chan struct{}),
 		now:     time.Now,
-		run:     Run,
+		run:     run,
 	}
 	go c.cleanup()
 	return c
@@ -138,14 +145,17 @@ func (c *Cache) Get(ctx context.Context, opt Options) Response {
 	}
 }
 
-// shouldCache decides whether a completed probe is worth holding for a full
-// day. Every outcome is cached, which enforces the daily limit strictly: a
-// transient failure (DNS timeout, local network fault) locks the operator to a
-// failed result until the entry expires.
+// shouldCache reports whether a completed probe is worth storing.
 //
-// TODO(rick): decide whether failures deserve a shorter TTL, or whether a
-// probe where every check timed out should be treated as a local fault and
-// left uncached.
+// Failures are cached for the full TTL, the same as successes. An operator who
+// fixes a node keeps the failed result until the entry expires, which is the
+// intended cost: a shorter TTL for failures would let a caller re-probe any
+// host on demand by making the probe fail, which defeats the daily limit.
+// Operators who need a narrower answer can request individual checks.
+//
+// The one case not stored is an empty result set. Run returns no results when
+// the requested check names match nothing, so storing it would pin a host to a
+// zero-check answer for a day.
 func shouldCache(results map[string]Result) bool {
 	return len(results) > 0
 }

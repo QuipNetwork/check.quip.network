@@ -189,7 +189,10 @@ paths:
             default: 443
         - name: checks
           in: query
-          description: Comma-separated check names or "all"
+          description: >
+            Comma-separated check names, or "all". Names are matched after
+            trimming and lowercasing. An unrecognized name is rejected with
+            400 rather than returning an empty result set.
           schema:
             type: string
             default: all
