@@ -126,8 +126,7 @@ func Run(ctx context.Context, opt Options) map[string]Result {
 // CheckTCP dials host:port.
 func CheckTCP(ctx context.Context, name, host string, port int, timeout time.Duration) Result {
 	p := port
-	d := net.Dialer{Timeout: timeout}
-	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+	conn, err := dialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)), timeout)
 	if err != nil {
 		return Result{Name: name, OK: false, Detail: err.Error(), Host: host, Port: &p}
 	}
@@ -138,8 +137,7 @@ func CheckTCP(ctx context.Context, name, host string, port int, timeout time.Dur
 // CheckTLS performs a TLS handshake with system CA verification.
 func CheckTLS(ctx context.Context, host string, port int, timeout time.Duration) Result {
 	p := port
-	d := net.Dialer{Timeout: timeout}
-	raw, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+	raw, err := dialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)), timeout)
 	if err != nil {
 		return Result{Name: "tls", OK: false, Detail: err.Error(), Host: host, Port: &p}
 	}
@@ -234,9 +232,19 @@ func CheckHTTP(ctx context.Context, name, host string, port int, path string, us
 }
 
 func httpClient(useHTTPS bool, timeout time.Duration) *http.Client {
-	tr := &http.Transport{}
+	tr := &http.Transport{DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		return dialContext(ctx, network, address, timeout)
+	}}
 	if useHTTPS {
 		tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
-	return &http.Client{Timeout: timeout, Transport: tr}
+	return &http.Client{Timeout: timeout, Transport: tr, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if restricted, _ := req.Context().Value(publicTargetKey{}).(bool); restricted {
+			return fmt.Errorf("redirects are not allowed for public reward probes")
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return nil
+	}}
 }
