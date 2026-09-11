@@ -14,37 +14,47 @@ import (
 )
 
 const (
-	windowSize     = time.Minute
-	maxRequests    = 5
-	cleanupPeriod  = 10 * time.Minute
-	idleExpiry     = 2 * time.Hour
+	// burstCapacity is how many requests a client may fire at once. The
+	// bucket starts full, so a fresh client gets the whole burst.
+	burstCapacity = 10
+	// refillPerSecond is the sustained rate a client may hold indefinitely.
+	// The node app checks two ports per second, so that pattern must never
+	// drain the bucket.
+	refillPerSecond = 2
+
+	cleanupPeriod = 10 * time.Minute
+	idleExpiry    = 2 * time.Hour
 )
 
-// Ban durations by violation level (0-indexed).
-var banDurations = []time.Duration{
-	1 * time.Hour,
-	24 * time.Hour,
-	7 * 24 * time.Hour,
-}
-
 type clientState struct {
-	mu          sync.Mutex
-	timestamps  []time.Time
-	violations  int
-	bannedUntil time.Time
-	lastSeen    time.Time
+	mu sync.Mutex
+	// tokens is the client's remaining request credit, refilled by elapsed
+	// time rather than on a schedule, so an idle client costs nothing.
+	tokens     float64
+	lastRefill time.Time
+
+	violations    int
+	lastViolation time.Time
+	bannedUntil   time.Time
+	lastSeen      time.Time
 }
 
-// Limiter implements per-IP sliding window rate limiting with
-// escalating bans.
+// Limiter implements per-IP token bucket rate limiting with escalating bans.
 type Limiter struct {
 	clients sync.Map // map[string]*clientState
 	stop    chan struct{}
+	now     func() time.Time // overridable in tests
 }
 
 // New creates a Limiter and starts its background cleanup goroutine.
 func New() *Limiter {
-	l := &Limiter{stop: make(chan struct{})}
+	return newWithClock(time.Now)
+}
+
+// newWithClock returns a Limiter reading time from now. It exists so tests can
+// drive refill and ban expiry without sleeping; production callers want New.
+func newWithClock(now func() time.Time) *Limiter {
+	l := &Limiter{stop: make(chan struct{}), now: now}
 	go l.cleanup()
 	return l
 }
@@ -67,69 +77,80 @@ func (l *Limiter) Middleware(next http.Handler) http.Handler {
 		cs := l.getOrCreate(ip)
 
 		cs.mu.Lock()
-		now := time.Now()
+		now := l.now()
 		cs.lastSeen = now
 
 		// Check active ban.
 		if now.Before(cs.bannedUntil) {
 			retryAfter := int(math.Ceil(
-				time.Until(cs.bannedUntil).Seconds(),
+				cs.bannedUntil.Sub(now).Seconds(),
 			))
+			violations := cs.violations
 			cs.mu.Unlock()
-			writeRateLimited(w, retryAfter, cs.violations)
+			writeRateLimited(w, retryAfter, violations)
 			return
 		}
 
-		// Prune timestamps outside the sliding window.
-		cutoff := now.Add(-windowSize)
-		fresh := cs.timestamps[:0]
-		for _, t := range cs.timestamps {
-			if t.After(cutoff) {
-				fresh = append(fresh, t)
-			}
-		}
-		cs.timestamps = fresh
+		cs.refill(now)
 
-		if len(cs.timestamps) >= maxRequests {
-			cs.violations++
-			dur := banDuration(cs.violations)
-			cs.bannedUntil = now.Add(dur)
+		if cs.tokens < 1 {
+			dur := cs.recordViolation(now)
 			retryAfter := int(math.Ceil(dur.Seconds()))
+			violations := cs.violations
 			cs.mu.Unlock()
-			writeRateLimited(w, retryAfter, cs.violations)
+			writeRateLimited(w, retryAfter, violations)
 			return
 		}
 
-		cs.timestamps = append(cs.timestamps, now)
+		cs.tokens--
 		cs.mu.Unlock()
 		next.ServeHTTP(w, r)
 	})
+}
+
+// refill credits the bucket for time elapsed since the last request, capped at
+// burstCapacity so idle time cannot bank unlimited credit.
+func (cs *clientState) refill(now time.Time) {
+	if cs.lastRefill.IsZero() {
+		cs.tokens = burstCapacity
+		cs.lastRefill = now
+		return
+	}
+	elapsed := now.Sub(cs.lastRefill).Seconds()
+	if elapsed <= 0 {
+		return
+	}
+	cs.tokens = math.Min(burstCapacity, cs.tokens+elapsed*refillPerSecond)
+	cs.lastRefill = now
+}
+
+// recordViolation escalates the client's violation count and sets the ban,
+// returning how long the ban lasts.
+func (cs *clientState) recordViolation(now time.Time) time.Duration {
+	if !cs.lastViolation.IsZero() && now.Sub(cs.lastViolation) >= violationDecay {
+		cs.violations = 0
+	}
+	cs.violations++
+	cs.lastViolation = now
+
+	dur := banDuration(cs.violations)
+	cs.bannedUntil = now.Add(dur)
+	return dur
 }
 
 func (l *Limiter) getOrCreate(ip string) *clientState {
 	if v, ok := l.clients.Load(ip); ok {
 		return v.(*clientState)
 	}
-	cs := &clientState{lastSeen: time.Now()}
+	cs := &clientState{lastSeen: l.now()}
 	actual, _ := l.clients.LoadOrStore(ip, cs)
 	return actual.(*clientState)
-}
-
-func banDuration(violations int) time.Duration {
-	idx := violations - 1
-	if idx >= len(banDurations) {
-		idx = len(banDurations) - 1
-	}
-	if idx < 0 {
-		idx = 0
-	}
-	return banDurations[idx]
 }
 
 func writeRateLimited(w http.ResponseWriter, retryAfter, banLevel int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusTooManyRequests)
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error":               "rate limited",
 		"retry_after_seconds": retryAfter,
 		"ban_level":           banLevel,
@@ -144,7 +165,7 @@ func (l *Limiter) cleanup() {
 		case <-l.stop:
 			return
 		case <-ticker.C:
-			now := time.Now()
+			now := l.now()
 			l.clients.Range(func(key, value any) bool {
 				cs := value.(*clientState)
 				cs.mu.Lock()
