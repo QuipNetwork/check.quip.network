@@ -116,6 +116,28 @@ func TestCheckPortInvalidPort(t *testing.T) {
 	}
 }
 
+func TestCheckPortRepeatIsServedFromCache(t *testing.T) {
+	// Port 2 is used by no other test, so the first request here is a miss.
+	code, first := getJSON(t, "/checkport?port=2")
+	if code != 200 {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if first["cached"] != false {
+		t.Fatalf("first request: expected cached=false, got %v", first["cached"])
+	}
+
+	code, second := getJSON(t, "/checkport?port=2")
+	if code != 200 {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if second["cached"] != true {
+		t.Fatalf("second request: expected cached=true, got %v", second["cached"])
+	}
+	if second["expires_at"] == nil {
+		t.Fatal("cached response is missing expires_at")
+	}
+}
+
 func TestCheckConnUsesCallerIP(t *testing.T) {
 	// /checkconn uses the caller's IP. Port 1 won't have QUIC.
 	code, body := getJSON(t, "/checkconn?port=1")
@@ -186,34 +208,69 @@ func TestCheckHostnameInvalidDNS(t *testing.T) {
 }
 
 func TestRateLimitEnforced(t *testing.T) {
-	// Use a unique client approach — send 6 rapid requests.
-	// The rate limiter tracks by IP, so in integration tests behind
-	// Docker networking all requests come from the same IP.
+	// The bucket holds a burst of 10 and refills at 2/sec, so a burst of 11
+	// with no pause between requests drains it. The rate limiter tracks by
+	// IP, and behind Docker networking all requests come from the same IP.
 	var lastCode int
-	for i := 0; i < 6; i++ {
+	for i := range 11 {
 		code, _ := getJSON(t, fmt.Sprintf("/ip?_t=%d", i))
 		lastCode = code
 	}
 	if lastCode != 429 {
-		t.Fatalf("expected 429 on 6th request, got %d", lastCode)
+		t.Fatalf("expected 429 once the burst was exhausted, got %d", lastCode)
 	}
 }
 
-func TestRateLimitBanEscalation(t *testing.T) {
+func TestRateLimitBanIsCappedAtFiveMinutes(t *testing.T) {
 	// After TestRateLimitEnforced, we should already be banned.
-	// Verify the ban response includes escalating fields.
 	code, body := getJSON(t, "/ip")
 	if code != 429 {
-		t.Skipf("not rate limited (code=%d), skipping escalation test", code)
+		t.Skipf("not rate limited (code=%d), skipping ban test", code)
 	}
 	retryAfter, ok := body["retry_after_seconds"].(float64)
 	if !ok || retryAfter <= 0 {
 		t.Fatalf("expected positive retry_after_seconds, got %v", body["retry_after_seconds"])
 	}
+	if retryAfter > 300 {
+		t.Fatalf("ban of %.0fs exceeds the 5 minute ceiling", retryAfter)
+	}
 	banLevel, ok := body["ban_level"].(float64)
 	if !ok || banLevel < 1 {
 		t.Fatalf("expected ban_level >= 1, got %v", body["ban_level"])
 	}
+}
+
+func TestSustainedTwoPerSecondIsNotRateLimited(t *testing.T) {
+	// The node app checks two ports per second; that pattern must survive.
+	// Runs before the burst tests exhaust the bucket would be unreliable, so
+	// wait out any ban this suite already earned.
+	waitForUnbanned(t)
+
+	for i := range 10 {
+		for j := range 2 {
+			code, _ := getJSON(t, fmt.Sprintf("/ip?_s=%d_%d", i, j))
+			if code == 429 {
+				t.Fatalf("sustained 2/s traffic was rate limited at second %d", i)
+			}
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// waitForUnbanned blocks until the service accepts a request again, or skips
+// the test if the ban outlasts the deadline.
+func waitForUnbanned(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(6 * time.Minute)
+	for time.Now().Before(deadline) {
+		if code, _ := getJSON(t, "/health"); code != 429 {
+			if code, _ := getJSON(t, "/ip"); code != 429 {
+				return
+			}
+		}
+		time.Sleep(10 * time.Second)
+	}
+	t.Skip("still banned after 6 minutes, skipping")
 }
 
 func TestHealthNotRateLimited(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 
+	"check.quip.network/checkcache"
 	"check.quip.network/handler"
 	"check.quip.network/probe"
 	"check.quip.network/ratelimit"
@@ -26,15 +27,19 @@ func main() {
 	probeCache := probe.NewCache()
 	defer probeCache.Stop()
 
+	// Self-targeted checks are cached per caller IP and port: an hour for a
+	// reachable result, a minute for a failure so operators see a fix.
+	selfCheckCache := checkcache.New()
+	defer selfCheckCache.Stop()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handler.Health)
 	mux.HandleFunc("GET /ip", handler.IP)
-	mux.HandleFunc("GET /checkport", handler.CheckPort)
-	mux.HandleFunc("GET /checkconn", handler.CheckConn)
+	mux.HandleFunc("GET /checkport", handler.NewCheckPort(selfCheckCache))
+	mux.HandleFunc("GET /checkconn", handler.NewCheckConn(selfCheckCache))
 	mux.HandleFunc("GET /checkhostname", handler.CheckHostname)
 	// Host-targeted reward probes (source of truth for node-quest boosts).
-	// Rate-limited by the global limiter (default 5 req/min per client IP)
-	// and cached per target host for 24h.
+	// Rate-limited by the global limiter and cached per target host for 24h.
 	mux.HandleFunc("GET /probe", handler.NewProbe(probeCache))
 
 	srv := &http.Server{

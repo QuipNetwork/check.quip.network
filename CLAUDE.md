@@ -66,15 +66,50 @@ make clean       # stop and remove container
 | `probe/cache.go` | 24h per-host probe cache + response envelope |
 | `quip/protocol.go` | QUIP wire format constants + STATUS_REQUEST builder |
 | `internal/iputil.go` | IP extraction (XFF, X-Real-IP, RemoteAddr), private IP validation |
-| `ratelimit/ratelimit.go` | Sliding window (5 req/min) + escalating bans |
+| `checkcache/cache.go` | Per-IP-and-port cache for /checkport and /checkconn |
+| `ratelimit/ratelimit.go` | Token bucket mechanics (burst 10, refill 2/s) |
+| `ratelimit/policy.go` | Ban ladder and violation decay |
 | `openapi.yaml` | OpenAPI 3.1 specification |
 | `tests/integration_test.go` | 16 integration tests against live container |
 
 ### Rate Limiting
 
-- 5 requests/minute per IP (sliding window), all endpoints except /health
-- Escalating bans: 1st violation → 1hr, 2nd → 1 day, 3rd+ → 1 week
-- Background cleanup prunes idle entries every 10 minutes
+Token bucket per IP, all endpoints except /health.
+
+- Bucket holds 10 requests and refills at 2 per second. A client may burst 10
+  requests, then sustain 2 per second forever. The node app checks two ports
+  per second, so that pattern must never trip the limiter.
+- A request arriving at an empty bucket is a violation and earns a ban.
+- Ban ladder: 30 seconds, then 2 minutes, then 5 minutes for every violation
+  after that. The 5 minute ceiling is `maxBanDuration`.
+- Violations decay after 15 minutes without a new violation, so the ladder
+  reflects current behavior rather than a permanent record. The decay window
+  must stay longer than the longest ban. If a client could outlast it by
+  serving the ban, every violation would be a first violation.
+- The ladder and the decay window live in `ratelimit/policy.go`, apart from
+  the bucket mechanics in `ratelimit/ratelimit.go`.
+- Background cleanup prunes idle entries every 10 minutes.
+
+### Self-Check Caching
+
+`/checkport` and `/checkconn` cache their results per caller IP and port. A
+reachable result stands for 1 hour. A failure stands for 1 minute.
+
+The split TTL exists because the usual caller of a failing check is an operator
+fixing a firewall and retrying. A 1 hour failure cache would make that operator
+wait an hour to see the fix, and 1 minute still collapses a retry storm.
+
+`/probe` takes the opposite rule and caches failures for the full 24 hours. A
+probe accepts another host as its target. A short failure TTL there would let a
+caller re-probe any host on demand by making the probe fail. That attack does
+not apply to a self-check.
+
+The cache key includes the check kind, so the TCP and QUIC checks never read
+each other's entries. The per-key lock collapses concurrent first-requests into
+a single outbound dial.
+
+Because the key uses the caller's public IP, machines behind one NAT share an
+entry for the same port.
 
 ### Probe Caching
 
