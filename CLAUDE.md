@@ -65,7 +65,7 @@ make clean       # stop and remove container
 | `probe/probe.go` | The six reward checks (source of truth for check semantics) |
 | `probe/cache.go` | 24h per-host probe cache + response envelope |
 | `quip/protocol.go` | QUIP wire format constants + STATUS_REQUEST builder |
-| `internal/iputil.go` | IP extraction (XFF, X-Real-IP, RemoteAddr), private IP validation |
+| `internal/iputil.go` | Client IP extraction and the trusted-proxy gate on forwarding headers |
 | `checkcache/cache.go` | Per-IP-and-port cache for /checkport and /checkconn |
 | `ratelimit/ratelimit.go` | Token bucket mechanics (burst 10, refill 2/s) |
 | `ratelimit/policy.go` | Ban ladder and violation decay |
@@ -131,6 +131,43 @@ check names matched nothing.
 ### Security: Self-Check Only
 
 `/checkport` and `/checkconn` always target the caller's own IP (derived from the connection). No `host` parameter is accepted — this prevents the service from being used as a port scanner or QUIC probe against arbitrary targets.
+
+### Security: Client IP and Trusted Proxies
+
+One derived value is the rate-limit bucket key, the self-check cache key and the
+dial target for `/checkport` and `/checkconn`. A caller who can name that value
+picks all three: a fresh bucket, an arbitrary cache entry, and where the service
+dials — which would undo the self-check-only rule above.
+
+So `X-Forwarded-For` and `X-Real-IP` are honoured **only** when the request
+arrived from a trusted proxy. Otherwise the connection address wins.
+
+- Loopback is always trusted, which covers the deployed shape: nginx terminates
+  TLS in front of the service and proxies to it over `127.0.0.1`.
+- `TRUSTED_PROXIES` extends that for deployments whose proxy is on another host.
+  It takes a comma-separated list of CIDRs or bare addresses, e.g.
+  `TRUSTED_PROXIES=10.4.0.0/16,192.0.2.5`. Unset means loopback only.
+- An unparseable entry is fatal at startup. Guessing is worse than not starting,
+  because the wrong answer silently mis-keys the limiter and the cache.
+
+A proxy in front of this service must **overwrite** both headers rather than
+append to them. Appending (`$proxy_add_x_forwarded_for`) leaves the caller's
+value first in the list, and the first entry is what gets read.
+
+## Deployment
+
+⚠ **The image CI builds is not the image that runs in production.**
+
+CI builds the plain `Dockerfile` — a distroless single binary on `:8080` with no
+TLS. Nothing deploys it; it is a build and test artifact.
+
+`check.quip.network` runs on Flux from a **separate image** that wraps this
+service in nginx for TLS, built from the **`deploy/flux`** branch, which carries
+`Dockerfile.tls`, `nginx.conf`, `entrypoint.sh` and `flux-app-spec.json`. That
+branch merges `main` when a release ships. Deployment packaging is maintained
+there, not here.
+
+If you are about to deploy this service, start from `deploy/flux`, not `main`.
 
 ## Docker Registries
 
