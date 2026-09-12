@@ -10,6 +10,7 @@ import (
 
 	"check.quip.network/checkcache"
 	"check.quip.network/handler"
+	"check.quip.network/internal"
 	"check.quip.network/probe"
 	"check.quip.network/ratelimit"
 )
@@ -18,6 +19,14 @@ func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
+	}
+
+	// Forwarding headers are believed only from loopback unless TRUSTED_PROXIES
+	// says otherwise. Fatal on a bad value: the extracted IP is the rate-limit
+	// key, the cache key and the dial target, so guessing here is worse than
+	// refusing to start.
+	if err := internal.ConfigureTrustedProxiesFromEnv(); err != nil {
+		log.Fatalf("TRUSTED_PROXIES: %v", err)
 	}
 
 	limiter := ratelimit.New()

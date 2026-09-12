@@ -5,6 +5,7 @@ package ratelimit
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -53,7 +54,9 @@ func get(t *testing.T, l *Limiter, ip, path string) (int, map[string]any) {
 		}))
 
 	req := httptest.NewRequest(http.MethodGet, path, nil)
-	req.Header.Set("X-Real-IP", ip)
+	// Identity comes from the connection. A forwarding header would be ignored
+	// here, because httptest's RemoteAddr is not a trusted proxy.
+	req.RemoteAddr = net.JoinHostPort(ip, "51000")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

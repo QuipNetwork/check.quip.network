@@ -32,7 +32,9 @@ func closedPort(t *testing.T) int {
 func call(t *testing.T, h http.HandlerFunc, path string) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
-	req.Header.Set("X-Real-IP", "127.0.0.1")
+	// Identity comes from the connection; a forwarding header from an
+	// untrusted remote is ignored.
+	req.RemoteAddr = "127.0.0.1:51000"
 	rec := httptest.NewRecorder()
 	h(rec, req)
 
