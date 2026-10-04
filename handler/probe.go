@@ -95,8 +95,17 @@ func checkProbe(w http.ResponseWriter, r *http.Request, cache *probe.Cache) {
 		}
 	}
 
+	// The probe dials an attacker-supplied host, so the context MUST carry the
+	// public-target restriction. Without it `dialContext` takes the unrestricted
+	// branch and the host string is dialed as-is, which turns /probe into an SSRF
+	// primitive against anything the service can reach (RFC1918 ranges, the
+	// 169.254.169.254 metadata endpoint, and internal-only DNS names that
+	// validateProbeHost cannot reject because it only inspects the literal
+	// string). `dialContext` re-resolves the name and refuses any address that
+	// is not globally routable, which also closes the DNS-rebinding window.
 	ctx, cancel := context.WithTimeout(r.Context(), timeout+2*time.Second)
 	defer cancel()
+	ctx = probe.WithPublicTargets(ctx)
 
 	// Cache is keyed on host alone, so a fresh entry is returned even when the
 	// port or check parameters differ; params_used reports what actually ran.
@@ -150,15 +159,59 @@ func validateProbeHost(host string) error {
 	if strings.EqualFold(host, "localhost") {
 		return &probeHostError{msg: "host address not allowed"}
 	}
-	// Block obvious loopback/metadata abuse while still allowing public miner IPs.
+	// Block the full set of non-public destinations, not just loopback and
+	// link-local. A literal RFC1918 address previously passed this check and was
+	// dialed directly, exposing hosts on the service's own private network. The
+	// dialer re-validates resolved addresses too (see probe.publicAddress), but
+	// rejecting obvious literals here fails fast and costs no DNS lookup.
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-			return &probeHostError{msg: "host address not allowed"}
-		}
-		// Cloud metadata well-known address
-		if ip.String() == "169.254.169.254" {
+		if !publicLiteral(ip) {
 			return &probeHostError{msg: "host address not allowed"}
 		}
 	}
 	return nil
 }
+
+// publicLiteral reports whether a literal IP is safe to probe. Cloud metadata
+// (169.254.169.254) falls under the link-local check and the IPv6 unique-local
+// range under the private check.
+func publicLiteral(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() || ip.IsMulticast() || ip.IsInterfaceLocalMulticast() {
+		return false
+	}
+	// IsPrivate covers RFC1918 (10/8, 172.16/12, 192.168/16) and IPv6 fc00::/7.
+	if ip.IsPrivate() {
+		return false
+	}
+	// Carrier-grade NAT, IETF protocol assignments, benchmarking, and
+	// documentation space all parse as global unicast but are unroutable.
+	for _, cidr := range nonPublicCIDRs {
+		if cidr.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+// nonPublicCIDRs are ranges that parse as global unicast but must never be
+// probed: shared address space, protocol assignments, benchmarking, and docs.
+var nonPublicCIDRs = func() []*net.IPNet {
+	raw := []string{
+		"100.64.0.0/10",   // RFC 6598 carrier-grade NAT
+		"192.0.0.0/24",    // RFC 6890 IETF protocol assignments
+		"192.0.2.0/24",    // RFC 5737 TEST-NET-1
+		"198.18.0.0/15",   // RFC 2544 benchmarking
+		"198.51.100.0/24", // RFC 5737 TEST-NET-2
+		"203.0.113.0/24",  // RFC 5737 TEST-NET-3
+		"240.0.0.0/4",     // reserved
+		"2001:db8::/32",   // RFC 3849 documentation
+	}
+	out := make([]*net.IPNet, 0, len(raw))
+	for _, c := range raw {
+		if _, n, err := net.ParseCIDR(c); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}()

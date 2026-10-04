@@ -88,3 +88,60 @@ func TestProbeAcceptsValidCheckSelections(t *testing.T) {
 		})
 	}
 }
+
+// TestProbeAppliesPublicTargetRestriction is a regression test for the SSRF
+// hole: /probe dials an attacker-supplied host, so the handler must mark the
+// context as public-target-restricted. Before the fix the restriction was never
+// applied on the request path and dialContext took its unrestricted branch,
+// making /probe an SSRF primitive against RFC1918 and metadata targets.
+func TestProbeAppliesPublicTargetRestriction(t *testing.T) {
+	var mu sync.Mutex
+	restricted := false
+	cache := probe.NewCacheWithRunner(func(ctx context.Context, _ probe.Options) map[string]probe.Result {
+		mu.Lock()
+		restricted = probe.TargetsAreRestricted(ctx)
+		mu.Unlock()
+		return map[string]probe.Result{"api_port": {Name: "api_port", OK: true}}
+	})
+	t.Cleanup(cache.Stop)
+
+	rec := httptest.NewRecorder()
+	NewProbe(cache)(rec, httptest.NewRequest(http.MethodGet,
+		"/probe?host=miner.example.com&checks=api_port", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want %d",
+			rec.Code, strings.TrimSpace(rec.Body.String()), http.StatusOK)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !restricted {
+		t.Error("probe runner received a context without the public-target restriction; " +
+			"dialContext would have dialed the host unrestricted")
+	}
+}
+
+// TestValidateProbeHostRejectsNonPublicLiterals is a regression test for the
+// incomplete IP blocklist: RFC1918, CGNAT, and documentation literals must be
+// rejected by the handler's own validation before any DNS lookup is spent.
+func TestValidateProbeHostRejectsNonPublicLiterals(t *testing.T) {
+	for _, host := range []string{
+		"10.0.0.1", "172.16.0.1", "192.168.1.1", // RFC1918
+		"169.254.169.254",  // cloud metadata
+		"127.0.0.1", "::1", // loopback
+		"100.64.1.1",       // RFC 6598 CGNAT
+		"192.0.2.1",        // RFC 5737 TEST-NET-1
+		"198.18.0.1",       // RFC 2544 benchmarking
+		"::ffff:127.0.0.1", // IPv4-mapped loopback
+	} {
+		if err := validateProbeHost(host); err == nil {
+			t.Errorf("validateProbeHost(%q) = nil, want rejection", host)
+		}
+	}
+
+	for _, host := range []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"} {
+		if err := validateProbeHost(host); err != nil {
+			t.Errorf("validateProbeHost(%q) = %v, want nil", host, err)
+		}
+	}
+}

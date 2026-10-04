@@ -28,9 +28,18 @@ func publicAddress(address netip.Addr) bool {
 	return true
 }
 
+// TargetsAreRestricted reports whether ctx carries the public-target
+// restriction applied by WithPublicTargets. It exists so callers (and tests)
+// can assert that the restriction actually reached the dialer instead of
+// silently taking the unrestricted branch.
+func TargetsAreRestricted(ctx context.Context) bool {
+	restricted, _ := ctx.Value(publicTargetKey{}).(bool)
+	return restricted
+}
+
 func dialContext(ctx context.Context, network, address string, timeout time.Duration) (net.Conn, error) {
 	dialer := net.Dialer{Timeout: timeout}
-	if restricted, _ := ctx.Value(publicTargetKey{}).(bool); !restricted {
+	if !TargetsAreRestricted(ctx) {
 		return dialer.DialContext(ctx, network, address)
 	}
 	host, port, err := net.SplitHostPort(address)
