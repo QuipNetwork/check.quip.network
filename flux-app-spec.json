@@ -7,7 +7,7 @@
     {
       "name": "check",
       "description": "check.quip.network diagnostic service with TLS via certifier",
-      "repotag": "registry.gitlab.com/quip.network/check.quip.network:tls-8b7c3a0-amd64@sha256:361343df52750feb500f53337935f9c225a0162d9ba5791e979916598f10f03e",
+      "repotag": "registry.gitlab.com/quip.network/check.quip.network:tls-fe539cb-amd64@sha256:68866309854592bdf3dc41dc12e8de013e62c8e15d5a42c19729da8f601243e8",
       "ports": [
         443,
         80
