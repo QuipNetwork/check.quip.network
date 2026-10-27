@@ -5,21 +5,31 @@ CERT_DIR="/etc/ssl"
 CERT_FILE="${CERT_DIR}/${DOMAIN}.crt"
 KEY_FILE="${CERT_DIR}/${DOMAIN}.key"
 
-# --- Restore the system trust store if the volume shadowed it ---
-# /etc/ssl is the app's persistent volume. Depending on how it is mounted it can
-# come up empty, taking the CA bundle with it. Go verifies /probe's tls, rpc,
-# telemetry and dashboard checks against the system pool, so a missing bundle
-# turns all four into "x509: certificate signed by unknown authority" while the
-# raw-TCP checks keep passing — a confusing half-failure. Restore, never
-# overwrite, so an issued cert in the volume is untouched.
-if [ ! -f "${CERT_DIR}/certs/ca-certificates.crt" ]; then
-    echo "[entrypoint] CA bundle missing from ${CERT_DIR}, restoring from image defaults."
-    mkdir -p "${CERT_DIR}/certs"
-    cp /opt/ssl-defaults/certs/ca-certificates.crt "${CERT_DIR}/certs/ca-certificates.crt"
-fi
-if [ ! -f "${CERT_DIR}/cert.pem" ]; then
-    cp /opt/ssl-defaults/cert.pem "${CERT_DIR}/cert.pem"
-fi
+# --- Replace the system trust store with the image's on every boot ---
+# /etc/ssl is the app's persistent volume, and it shadows the image's own
+# /etc/ssl. Go verifies /probe's tls, rpc, telemetry and dashboard checks
+# against the bundle in it. A missing bundle turns all four into "x509:
+# certificate signed by unknown authority" while the raw-TCP checks keep
+# passing. A stale one is worse: a bundle restored once and kept forever never
+# loses a root, so it kept trusting the forged eMudhra chain (QUI-1923) through
+# every rebuild. The trust store is not user data, so overwrite it. The issued
+# cert and key sit beside it and are never touched. If the copy fails, stop
+# rather than serve TLS verdicts from a store we could not refresh.
+mkdir -p "${CERT_DIR}/certs"
+for f in certs/ca-certificates.crt cert.pem; do
+    src="/opt/ssl-defaults/${f}"
+    dst="${CERT_DIR}/${f}"
+    cmp -s "${src}" "${dst}" && continue
+    if [ -e "${dst}" ]; then
+        echo "[entrypoint] ${dst} differs from the image's trust store, replacing it."
+    else
+        echo "[entrypoint] ${dst} missing, restoring it from the image."
+    fi
+    if ! { cp "${src}" "${dst}.tmp" && mv "${dst}.tmp" "${dst}" && cmp -s "${src}" "${dst}"; }; then
+        echo "[entrypoint] FATAL: could not refresh ${dst} from the image."
+        exit 1
+    fi
+done
 
 # --- TLS Certificate via dnsimple-certifier ---
 if [ -f "${CERT_FILE}" ]; then
