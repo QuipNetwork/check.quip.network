@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+include:
+  - project: quip.network/ci-templates
+    ref: v1.0.0
+    file: templates/dependency-gate.yml
+
 stages:
   - lint
   - build
@@ -69,6 +74,10 @@ manifest-branch:
 
 manifest-tag:
   extends: .manifest
+  needs:
+    - {job: dependency-gate, optional: true}
+    - build-amd64
+    - build-arm64
   script:
     - docker manifest create "${IMAGE}:${CI_COMMIT_TAG}"
         "${IMAGE}:${CI_COMMIT_SHORT_SHA}-amd64"
