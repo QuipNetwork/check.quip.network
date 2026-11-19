@@ -34,8 +34,10 @@ FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c
 COPY --from=builder /check-quip /usr/local/bin/check-quip
 COPY --from=certifier-builder /certifier /usr/local/bin/certifier
 
-# Install nginx and envsubst
-RUN apk add --no-cache nginx gettext
+# Install nginx and envsubst. 1.30.7 carries the 2026-11-18 security fixes, so
+# refuse to build on anything older.
+RUN apk add --no-cache nginx gettext \
+    && [ "$(apk version -t "$(apk info -e -v nginx | sed 's/^nginx-//')" 1.30.7-r0)" != "<" ]
 
 # Stash the system trust store outside /etc/ssl. Flux mounts the app volume at
 # /etc/ssl (containerData), and that mount shadows the image's contents — so
